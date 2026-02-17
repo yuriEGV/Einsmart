@@ -32,6 +32,11 @@ const questionSchema = new mongoose.Schema({
         enum: ['easy', 'medium', 'hard'],
         default: 'medium'
     },
+    status: {
+        type: String,
+        enum: ['pending', 'approved', 'rejected'],
+        default: 'pending'
+    },
     tags: [String],
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,

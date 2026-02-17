@@ -11,14 +11,15 @@ const DashboardPage = () => {
     const { tenant } = useTenant();
     const { isSuperAdmin, canManageStudents } = usePermissions();
 
-    const [stats, setStats] = useState({ studentCount: 0, courseCount: 0 });
+    const [stats, setStats] = useState<any>({ studentCount: 0, courseCount: 0, tenantCount: 0, isPlatformView: false });
     const [recentGrades, setRecentGrades] = useState([]);
     const [notifications, setNotifications] = useState([]); // [NEW] For Admin/Sostenedor
-    // const [recentAnotaciones, setRecentAnotaciones] = useState([]); // Unused
-    const [upcomingEvents, setUpcomingEvents] = useState([]);
-    const [pendingSignatures, setPendingSignatures] = useState([]);
     const [adminRanking, setAdminRanking] = useState([]);
     const [classBookMetrics, setClassBookMetrics] = useState<any>(null);
+    const [recentAnotaciones, setRecentAnotaciones] = useState([]);
+    const [pendingCitations, setPendingCitations] = useState([]);
+    const [upcomingEvents, setUpcomingEvents] = useState([]);
+    const [pendingSignatures, setPendingSignatures] = useState([]);
 
     useEffect(() => {
         if (user) {
@@ -40,26 +41,31 @@ const DashboardPage = () => {
             if (signaturesRes.data) setPendingSignatures(signaturesRes.data);
 
             if (user?.role === 'student' || user?.role === 'apoderado') {
-                const gradesRes = await api.get('/grades');
+                const [gradesRes, anotRes, citRes] = await Promise.all([
+                    api.get('/grades'),
+                    api.get('/anotaciones'),
+                    api.get('/citaciones')
+                ]);
                 setRecentGrades(gradesRes.data.slice(0, 5));
-
-                // const anotRes = await api.get('/anotaciones');
-                // setRecentAnotaciones(anotRes.data.slice(0, 5));
+                setRecentAnotaciones(anotRes.data.slice(0, 5));
+                setPendingCitations(citRes.data.filter((c: any) => c.estado !== 'realizada' && c.estado !== 'cancelada'));
             } else {
-                // [NEW] Fetch notifications for Admin/Sostenedor/Director
-                const notifRes = await api.get('/user-notifications');
-                setNotifications(notifRes.data.slice(0, 5));
-
                 // [NEW] Fetch Admin Day Ranking for Director/Sostenedor
-                if (user?.role === 'director' || user?.role === 'sostenedor' || isSuperAdmin) {
-                    const rankingRes = await api.get('/admin-days/ranking');
+                if (user?.role === 'director' || user?.role === 'sostenedor' || isSuperAdmin || user?.role === 'inspector_general') {
+                    const [rankingRes, metricsRes, citRes] = await Promise.all([
+                        api.get('/admin-days/ranking'),
+                        api.get('/analytics/class-book'),
+                        api.get('/citaciones')
+                    ]);
                     setAdminRanking(rankingRes.data.slice(0, 5));
-
-                    // Fetch Class Book Metrics for admins
-                    const metricsRes = await api.get('/analytics/class-book');
                     setClassBookMetrics(metricsRes.data);
+                    setPendingCitations(citRes.data.filter((c: any) => c.estado !== 'realizada' && c.estado !== 'cancelada'));
                 }
             }
+
+            // Fetch notifications for ALL roles
+            const notifRes = await api.get('/user-notifications');
+            setNotifications(notifRes.data.slice(0, 5));
         } catch (error) {
             console.error('Error loading dashboard data', error);
         }
@@ -85,6 +91,34 @@ const DashboardPage = () => {
                     >
                         Ir al Libro de Clases <ChevronRight size={18} />
                     </a>
+                </div>
+            )}
+
+            {/* Citaciones Pendientes para Apoderados */}
+            {pendingCitations.length > 0 && (
+                <div className="bg-blue-50 border-2 border-blue-100 p-6 rounded-[2.5rem] flex flex-col md:flex-row items-center justify-between gap-6 animate-in zoom-in-95 duration-500 shadow-xl shadow-blue-900/5">
+                    <div className="flex items-center gap-6 text-center md:text-left">
+                        <div className="p-4 bg-blue-600 text-white rounded-3xl shadow-xl shadow-blue-200">
+                            <Calendar size={32} />
+                        </div>
+                        <div>
+                            <h3 className="text-xl font-black text-blue-900 uppercase tracking-tighter">
+                                {user?.role === 'student' || user?.role === 'apoderado' ? 'CITACIÓN PENDIENTE' : 'CONTROL DE CITACIONES'}
+                            </h3>
+                            <p className="text-sm font-bold text-blue-700/70">
+                                {user?.role === 'student' || user?.role === 'apoderado'
+                                    ? `Tienes ${pendingCitations.length} citaciones agendadas para entrevista.`
+                                    : `Hay ${pendingCitations.length} citaciones pendientes en el establecimiento.`}
+                            </p>
+                        </div>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                        {pendingCitations.map((cit: any) => (
+                            <div key={cit._id} className="text-[10px] font-black text-blue-600 uppercase tracking-widest bg-white/50 px-4 py-1.5 rounded-full border border-blue-100">
+                                {new Date(cit.fecha).toLocaleDateString()} • {cit.hora} • {cit.motivo}
+                            </div>
+                        ))}
+                    </div>
                 </div>
             )}
 
@@ -144,38 +178,69 @@ const DashboardPage = () => {
 
             {/* Stats Cards - Grid optimized for adaptability */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                {canManageStudents && (
-                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 hover:shadow-xl transition-all group">
-                        <div className="flex items-center justify-between mb-4">
-                            <div className="p-3 bg-blue-50 rounded-2xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all"><GraduationCap size={24} /></div>
-                            <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Estudiantes</span>
+                {stats.isPlatformView ? (
+                    <>
+                        <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 hover:shadow-xl transition-all group">
+                            <div className="flex items-center justify-between mb-4">
+                                <div className="p-3 bg-blue-50 rounded-2xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all"><School size={24} /></div>
+                                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Instituciones</span>
+                            </div>
+                            <p className="text-4xl md:text-5xl font-black text-slate-800 tracking-tighter">{stats.tenantCount}</p>
+                            <p className="text-[10px] font-bold text-slate-400 mt-2 uppercase tracking-tight">Colegios en la Plataforma</p>
                         </div>
-                        <p className="text-4xl md:text-5xl font-black text-slate-800 tracking-tighter">{stats.studentCount.toLocaleString()}</p>
-                        <p className="text-[10px] font-bold text-slate-400 mt-2 uppercase tracking-tight">Matrículas Vigentes</p>
-                    </div>
-                )}
+                        <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 hover:shadow-xl transition-all group">
+                            <div className="flex items-center justify-between mb-4">
+                                <div className="p-3 bg-emerald-50 rounded-2xl text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white transition-all"><GraduationCap size={24} /></div>
+                                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Matrícula Global</span>
+                            </div>
+                            <p className="text-4xl md:text-5xl font-black text-slate-800 tracking-tighter">{stats.studentCount.toLocaleString()}</p>
+                            <p className="text-[10px] font-bold text-slate-400 mt-2 uppercase tracking-tight">Estudiantes Sincronizados</p>
+                        </div>
+                    </>
+                ) : (
+                    <>
+                        {(canManageStudents || user?.role === 'teacher') && (
+                            <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 hover:shadow-xl transition-all group">
+                                <div className="flex items-center justify-between mb-4">
+                                    <div className="p-3 bg-blue-50 rounded-2xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all"><GraduationCap size={24} /></div>
+                                    <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">
+                                        {user?.role === 'teacher' ? 'Mis Estudiantes' : 'Estudiantes'}
+                                    </span>
+                                </div>
+                                <p className="text-4xl md:text-5xl font-black text-slate-800 tracking-tighter">{stats.studentCount.toLocaleString()}</p>
+                                <p className="text-[10px] font-bold text-slate-400 mt-2 uppercase tracking-tight">
+                                    {user?.role === 'teacher' ? 'Alumnos a cargo' : 'Matrículas Vigentes'}
+                                </p>
+                            </div>
+                        )}
 
-                {(isSuperAdmin || user?.role === 'teacher') && (
-                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 hover:shadow-xl transition-all group">
-                        <div className="flex items-center justify-between mb-4">
-                            <div className="p-3 bg-emerald-50 rounded-2xl text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white transition-all"><BookOpen size={24} /></div>
-                            <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Cursos</span>
-                        </div>
-                        <p className="text-4xl md:text-5xl font-black text-slate-800 tracking-tighter">{stats.courseCount}</p>
-                        <p className="text-[10px] font-bold text-slate-400 mt-2 uppercase tracking-tight">Niveles Académicos</p>
-                    </div>
+                        {(isSuperAdmin || user?.role === 'teacher') && (
+                            <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 hover:shadow-xl transition-all group">
+                                <div className="flex items-center justify-between mb-4">
+                                    <div className="p-3 bg-emerald-50 rounded-2xl text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white transition-all"><BookOpen size={24} /></div>
+                                    <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">
+                                        {user?.role === 'teacher' ? 'Mis Cursos' : 'Cursos'}
+                                    </span>
+                                </div>
+                                <p className="text-4xl md:text-5xl font-black text-slate-800 tracking-tighter">{stats.courseCount}</p>
+                                <p className="text-[10px] font-bold text-slate-400 mt-2 uppercase tracking-tight">
+                                    {user?.role === 'teacher' ? 'Cursos Asignados' : 'Niveles Académicos'}
+                                </p>
+                            </div>
+                        )}
+                    </>
                 )}
 
                 <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 hover:shadow-xl transition-all group flex flex-col justify-center">
                     <div className="flex items-center justify-between mb-4">
                         <div className="p-3 bg-amber-50 rounded-2xl text-amber-600 group-hover:bg-amber-600 group-hover:text-white transition-all"><School size={24} /></div>
-                        <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Estado</span>
+                        <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">{stats.isPlatformView ? 'Plataforma' : 'Estado'}</span>
                     </div>
-                    <p className="text-lg font-black text-emerald-600 uppercase italic tracking-tight">Institución Activa</p>
-                    <p className="text-[10px] font-bold text-slate-400 mt-2 uppercase tracking-tight">Periodo {new Date().getFullYear()}</p>
+                    <p className="text-lg font-black text-emerald-600 uppercase italic tracking-tight">{stats.isPlatformView ? 'Sistema Operativo' : 'Institución Activa'}</p>
+                    <p className="text-[10px] font-bold text-slate-400 mt-2 uppercase tracking-tight">{stats.isPlatformView ? 'Todos los Nodos OK' : `Periodo ${new Date().getFullYear()}`}</p>
                 </div>
 
-                {classBookMetrics && (
+                {classBookMetrics && !stats.isPlatformView && (
                     <div className="bg-[#11355a] p-6 md:p-8 rounded-3xl shadow-2xl border border-slate-100/10 hover:shadow-blue-900/40 transition-all group lg:col-span-3">
                         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
                             <div className="space-y-2">
@@ -193,7 +258,12 @@ const DashboardPage = () => {
                                 </div>
                                 <div className="space-y-1">
                                     <p className="text-[9px] font-black text-blue-400/50 uppercase tracking-widest">Horas Efectivas</p>
-                                    <p className="text-xl font-black text-blue-300">{Math.round(classBookMetrics.classTimeMetrics.reduce((acc: any, curr: any) => acc + curr.totalDuration, 0) / 60)}h</p>
+                                    <p className="text-xl font-black text-blue-300">
+                                        {(() => {
+                                            const totalMin = classBookMetrics.classTimeMetrics.reduce((acc: any, curr: any) => acc + curr.totalDuration, 0);
+                                            return totalMin < 60 ? `${totalMin}m` : `${(totalMin / 60).toFixed(1)}h`;
+                                        })()}
+                                    </p>
                                 </div>
                                 <a href="/schedules" className="flex flex-col items-center justify-center p-3 border border-white/10 rounded-2xl bg-white/5 hover:bg-white/10 transition-all">
                                     <Clock className="text-blue-400" size={20} />
@@ -245,31 +315,42 @@ const DashboardPage = () => {
                     </div>
                 </div>
 
-                {/* Academic Notifications */}
+                {/* Academic Notifications (Grades & Annotations) */}
                 {(user?.role === 'student' || user?.role === 'apoderado') && (
                     <div className="bg-white rounded-[2.5rem] shadow-2xl border border-gray-100 overflow-hidden">
                         <div
-                            className="px-8 py-6"
+                            className="px-8 py-6 flex justify-between items-center"
                             style={{ backgroundColor: tenant?.theme?.primaryColor || '#11355a' }}
                         >
                             <h2 className="text-white font-black uppercase tracking-[0.1em] text-sm flex items-center gap-2">
                                 <AlertCircle size={18} className="text-rose-300" /> ACTIVIDAD ACADÉMICA
                             </h2>
+                            <a href="/hoja-de-vida" className="text-xs font-black text-blue-200 hover:text-white transition-colors">Ver Completa →</a>
                         </div>
                         <div className="p-6 md:p-8 space-y-4">
-                            {recentGrades.map((grade: any) => (
-                                <div key={grade._id} className="flex items-center gap-4 p-4 hover:bg-slate-50 rounded-[1.5rem] transition-all border-2 border-transparent hover:border-slate-100 group">
-                                    <div className="bg-emerald-50 p-2.5 rounded-xl group-hover:scale-110 transition-transform">
-                                        <FileText className="text-emerald-500" size={20} />
+                            {/* Mix of grades and annotations */}
+                            {[...recentGrades.map((g: any) => ({ ...(g as any), itemType: 'grade' })), ...recentAnotaciones.map((a: any) => ({ ...(a as any), itemType: 'annotation' }))]
+                                .sort((a, b) => new Date(b.createdAt || b.fechaOcurrencia).getTime() - new Date(a.createdAt || a.fechaOcurrencia).getTime())
+                                .slice(0, 6)
+                                .map((item: any) => (
+                                    <div key={item._id} className="flex items-center gap-4 p-4 hover:bg-slate-50 rounded-[1.5rem] transition-all border-2 border-transparent hover:border-slate-100 group">
+                                        <div className={`${item.itemType === 'grade' ? 'bg-emerald-50' : (item.tipo === 'positiva' ? 'bg-emerald-50' : 'bg-rose-50')} p-2.5 rounded-xl group-hover:scale-110 transition-transform`}>
+                                            {item.itemType === 'grade' ? <FileText className="text-emerald-500" size={20} /> : <AlertCircle className={item.tipo === 'positiva' ? 'text-emerald-500' : 'text-rose-500'} size={20} />}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-0.5">
+                                                {item.itemType === 'grade' ? 'Calificación Nueva' : `Anotación ${item.tipo}`}
+                                            </p>
+                                            <p className="text-sm font-black text-slate-700 truncate">{item.evaluationId?.title || item.titulo || 'Registro'}</p>
+                                        </div>
+                                        {item.itemType === 'grade' ? (
+                                            <span className="text-2xl font-black text-emerald-600 tracking-tighter">{item.score}</span>
+                                        ) : (
+                                            <span className="text-[10px] font-black text-slate-400 italic">{new Date(item.fechaOcurrencia).toLocaleDateString()}</span>
+                                        )}
                                     </div>
-                                    <div className="flex-1 min-w-0">
-                                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-0.5">Calificación Nueva</p>
-                                        <p className="text-sm font-black text-slate-700 truncate">{grade.evaluationId?.title || 'Evaluación'}</p>
-                                    </div>
-                                    <span className="text-2xl font-black text-emerald-600 tracking-tighter">{grade.score}</span>
-                                </div>
-                            ))}
-                            {recentGrades.length === 0 && (
+                                ))}
+                            {recentGrades.length === 0 && recentAnotaciones.length === 0 && (
                                 <div className="py-12 text-center">
                                     <AlertCircle size={48} className="mx-auto text-gray-100 mb-4" />
                                     <p className="text-gray-300 font-black uppercase tracking-widest text-[10px]">Sin novedades</p>

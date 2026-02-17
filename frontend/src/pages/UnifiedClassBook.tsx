@@ -1,59 +1,64 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
-import {
-    BookOpen, GraduationCap, X,
-    Calendar, List, ShieldCheck,
-    UserCheck, ClipboardList, Printer, LayoutGrid, UserPlus, AlertCircle,
-    ChevronLeft, ChevronRight, Search
-} from 'lucide-react';
+import { ChevronRight, ChevronLeft, GraduationCap, ClipboardList, Calendar, BookOpen, AlertCircle, Search, ShieldCheck, UserCheck, List, LayoutGrid, Printer, UserPlus, ExternalLink, FileText, X } from 'lucide-react';
 import { useTenant } from '../context/TenantContext';
+import { useAuth } from '../context/AuthContext';
 import { useReactToPrint } from 'react-to-print';
 
 const UnifiedClassBook = () => {
     const { tenant } = useTenant();
+    const { user } = useAuth();
     const printRef = useRef<HTMLDivElement>(null);
+    const actaPrintRef = useRef<HTMLDivElement>(null);
 
-    // Context & State
-    const [activeTab, setActiveTab] = useState<'ficha' | 'asistencia' | 'leccionario' | 'notas' | 'citaciones'>('leccionario');
+    const [sidebarExpanded, setSidebarExpanded] = useState(true);
+    const [activeTab, setActiveTab] = useState<'ficha' | 'asistencia' | 'leccionario' | 'notas' | 'citaciones' | 'anotaciones'>('ficha');
+    const [attendanceViewMode, setAttendanceViewMode] = useState<'grid' | 'list'>('grid');
+
     const [courses, setCourses] = useState<any[]>([]);
     const [subjects, setSubjects] = useState<any[]>([]);
+    const [students, setStudents] = useState<any[]>([]);
+    const [logs, setLogs] = useState<any[]>([]);
+    const [evaluations, setEvaluations] = useState<any[]>([]);
+    const [grades, setGrades] = useState<any[]>([]);
+    const [citaciones, setCitaciones] = useState<any[]>([]);
+    const [annotations, setAnnotations] = useState<any[]>([]);
+
     const [selectedCourse, setSelectedCourse] = useState('');
     const [selectedSubject, setSelectedSubject] = useState('');
-    const [students, setStudents] = useState<any[]>([]);
-    const [searchQuery, setSearchQuery] = useState('');
-    const [sidebarExpanded, setSidebarExpanded] = useState(true);
-
-    // Sub-states
-    const [logs, setLogs] = useState<any[]>([]);
-    const [showLogForm, setShowLogForm] = useState(false);
-    const [logFormData, setLogFormData] = useState({
-        date: new Date().toISOString().split('T')[0],
-        topic: '',
-        activities: '',
-        objectives: [] as string[]
-    });
-
-    const [attendanceMap, setAttendanceMap] = useState<Record<string, string>>({});
     const [attendanceDate, setAttendanceDate] = useState(new Date().toISOString().split('T')[0]);
-    const [selectedBlock, setSelectedBlock] = useState('Bloque 1 (08:00 - 09:30)');
+    const [selectedBlock, setSelectedBlock] = useState('Bloque 1');
+    const [attendanceMap, setAttendanceMap] = useState<Record<string, string>>({});
+    const [searchQuery, setSearchQuery] = useState('');
+
+    const [showLogForm, setShowLogForm] = useState(false);
+    const [logFormData, setLogFormData] = useState({ date: new Date().toISOString().split('T')[0], topic: '', activities: '', objectives: [] as string[] });
     const [attendanceConfirmed, setAttendanceConfirmed] = useState(false);
 
-    const [grades, setGrades] = useState<any[]>([]);
-    const [evaluations, setEvaluations] = useState<any[]>([]);
-    const [showGradeModal, setShowGradeModal] = useState(false);
-
-    // View Mode & Details
-    const [attendanceViewMode, setAttendanceViewMode] = useState<'grid' | 'list'>('grid');
-    const [showStudentDetailModal, setShowStudentDetailModal] = useState(false);
-    const [selectedStudentForDetail, setSelectedStudentForDetail] = useState<any>(null);
-
-    // Signature State
     const [showSignatureModal, setShowSignatureModal] = useState(false);
     const [signingLogId, setSigningLogId] = useState<string | null>(null);
     const [pin, setPin] = useState('');
 
-    // Citaciones State
-    const [citaciones, setCitaciones] = useState<any[]>([]);
+    // Aula Efectiva (Timer)
+    const [isTimerRunning, setIsTimerRunning] = useState(false);
+    const [effectiveDuration, setEffectiveDuration] = useState(0); // in minutes
+    const [timerStartTime, setTimerStartTime] = useState<number | null>(null);
+
+    // Grade Entry Modal
+    const [showGradeModal, setShowGradeModal] = useState(false);
+    const [gradeFormData, setGradeFormData] = useState({
+        estudianteId: '',
+        evaluationId: '',
+        score: 4.0,
+        comments: ''
+    });
+
+    // Student Detail Modal
+    const [showStudentDetailModal, setShowStudentDetailModal] = useState(false);
+    const [selectedStudentForDetail, setSelectedStudentForDetail] = useState<any>(null);
+    const [studentPerformance, setStudentPerformance] = useState<any>(null);
+
+    // Citacion Modal
     const [showCitacionModal, setShowCitacionModal] = useState(false);
     const [citacionFormData, setCitacionFormData] = useState({
         estudianteId: '',
@@ -64,11 +69,84 @@ const UnifiedClassBook = () => {
         modalidad: 'presencial',
         lugar: ''
     });
+    const [showActaModal, setShowActaModal] = useState(false);
+    const [selectedCitacion, setSelectedCitacion] = useState<any>(null);
+    const [actaFormData, setActaFormData] = useState({
+        estado: 'realizada',
+        actaReunion: '',
+        acuerdo: '',
+        resultado: '',
+        asistioApoderado: true
+    });
+
+    // Annotations State
+    const [showAnnotationModal, setShowAnnotationModal] = useState(false);
+    const [annotationFormData, setAnnotationFormData] = useState({
+        estudianteId: '', // if empty, it's a general course annotation
+        tipo: 'positiva',
+        titulo: '',
+        descripcion: '',
+        fecha: new Date().toISOString().split('T')[0]
+    });
+
+    useEffect(() => {
+        let interval: any;
+        if (isTimerRunning && timerStartTime) {
+            interval = setInterval(() => {
+                const now = Date.now();
+                const elapsed = Math.floor((now - timerStartTime) / 60000); // Minutes
+                setEffectiveDuration(elapsed);
+            }, 60000);
+        }
+        return () => clearInterval(interval);
+    }, [isTimerRunning, timerStartTime]);
+
+    // Start timer when selecting a block that is currently active or about to start
+    useEffect(() => {
+        if (selectedBlock && !isTimerRunning) {
+            // In a real app, check if current time matches block time
+            // For now, auto-start when opening the book/selecting block
+            setTimerStartTime(Date.now());
+            setIsTimerRunning(true);
+        }
+    }, [selectedBlock]);
+
+
+
 
     const handlePrint = useReactToPrint({
         contentRef: printRef,
         documentTitle: `Libro de Clases - ${selectedCourse || 'Curso'}`,
     });
+
+    const handlePrintActa = useReactToPrint({
+        contentRef: actaPrintRef,
+        documentTitle: `Acta de Reunión - ${selectedCitacion?.estudianteId?.apellidos || 'Documento'}`,
+    });
+
+    const openActaModal = (citacion: any) => {
+        setSelectedCitacion(citacion);
+        setActaFormData({
+            estado: citacion.estado || 'realizada',
+            actaReunion: citacion.actaReunion || '',
+            acuerdo: citacion.acuerdo || '',
+            resultado: citacion.resultado || '',
+            asistioApoderado: citacion.asistioApoderado ?? true
+        });
+        setShowActaModal(true);
+    };
+
+    const handleSaveActa = async (e: React.FormEvent) => {
+        e.preventDefault();
+        try {
+            await api.patch(`/citaciones/${selectedCitacion._id}/status`, actaFormData);
+            alert('Acta guardada correctamente.');
+            setShowActaModal(false);
+            refreshTabContent();
+        } catch (err: any) {
+            alert(err.response?.data?.message || 'Error al guardar el acta.');
+        }
+    };
 
     // -------------------------------------------------------------------------
     // Data Fetching
@@ -77,13 +155,18 @@ const UnifiedClassBook = () => {
     useEffect(() => {
         const fetchInitial = async () => {
             try {
-                const [cRes, sRes] = await Promise.all([api.get('/courses'), api.get('/subjects')]);
+                // [FIX] Directors and specialized roles should see ALL courses
+                const endpoint = (user?.role === 'director' || user?.role === 'utp' || user?.role === 'admin' || user?.role === 'sostenedor')
+                    ? '/courses?all=true'
+                    : '/courses';
+
+                const [cRes, sRes] = await Promise.all([api.get(endpoint), api.get('/subjects')]);
                 setCourses(cRes.data);
                 setSubjects(sRes.data);
             } catch (err) { console.error(err); }
         };
         fetchInitial();
-    }, []);
+    }, [user]);
 
     const refreshTabContent = async () => {
         if (!selectedCourse) return;
@@ -100,9 +183,19 @@ const UnifiedClassBook = () => {
                 const amap: Record<string, string> = {};
                 studRes.data.forEach((s: any) => {
                     const rec = attRes.data.find((r: any) => (r.estudianteId?._id || r.estudianteId) === s._id);
-                    amap[s._id] = rec ? rec.estado : 'presente';
+                    if (rec) amap[s._id] = rec.estado;
                 });
                 setAttendanceMap(amap);
+            } else if (activeTab === 'anotaciones') {
+                const [annRes, studRes] = await Promise.all([
+                    api.get(`/anotaciones?cursoId=${selectedCourse}`),
+                    api.get(`/estudiantes?cursoId=${selectedCourse}`)
+                ]);
+                setAnnotations(annRes.data);
+                setStudents(studRes.data);
+            } else if (activeTab === 'citaciones') {
+                const res = await api.get(`/citaciones?cursoId=${selectedCourse}`);
+                setCitaciones(res.data);
             } else if (selectedSubject) {
                 if (activeTab === 'leccionario') {
                     const res = await api.get(`/class-logs?courseId=${selectedCourse}&subjectId=${selectedSubject}`);
@@ -148,7 +241,12 @@ const UnifiedClassBook = () => {
         e.preventDefault();
         if (!attendanceConfirmed) { alert('Debe confirmar el pase de lista antes de firmar.'); return; }
         try {
-            const res = await api.post('/class-logs', { ...logFormData, courseId: selectedCourse, subjectId: selectedSubject });
+            const res = await api.post('/class-logs', {
+                ...logFormData,
+                courseId: selectedCourse,
+                subjectId: selectedSubject,
+                bloqueHorario: selectedBlock
+            });
             // Automatic prompt to sign or just refresh
             alert('Registro guardado. Ahora proceda a firmar digitalmente.');
             setShowLogForm(false);
@@ -162,14 +260,33 @@ const UnifiedClassBook = () => {
     const handleSignLog = async () => {
         if (!signingLogId || pin.length < 4) return;
         try {
-            await api.post(`/class-logs/${signingLogId}/sign`, { pin });
+            await api.post(`/class-logs/${signingLogId}/sign`, {
+                pin,
+                effectiveDuration, // Send the tracked duration
+                bloqueHorario: selectedBlock
+            });
             alert('Registro firmado exitosamente con firma digital legal.');
             setShowSignatureModal(false);
             setSigningLogId(null);
             setPin('');
+            setIsTimerRunning(false); // Stop timer
             refreshTabContent();
-        } catch (err) { alert('PIN Incorrecto o Error de Validación de Firma.'); }
+        } catch (err) { alert('Error al firmar documento.'); }
     };
+
+    const handleSaveGrade = async (e: React.FormEvent) => {
+        e.preventDefault();
+        try {
+            await api.post('/grades', gradeFormData);
+            alert('Calificación ingresada correctamente.');
+            setShowGradeModal(false);
+            setGradeFormData({ ...gradeFormData, estudianteId: '', evaluationId: '', score: 4.0 });
+            refreshTabContent();
+        } catch (err: any) {
+            alert(err.response?.data?.message || 'Error al guardar calificación.');
+        }
+    };
+
 
     const handleSaveCitacion = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -181,7 +298,130 @@ const UnifiedClassBook = () => {
             alert('Citación programada y notificada al apoderado.');
             setShowCitacionModal(false);
             refreshTabContent();
-        } catch (err) { alert('Error al programar la citación.'); }
+        } catch (err: any) {
+            alert(err.response?.data?.message || 'Error al programar la citación.');
+        }
+    };
+
+    const handleSaveAnnotation = async (e: React.FormEvent) => {
+        e.preventDefault();
+        try {
+            await api.post('/anotaciones', {
+                ...annotationFormData,
+                cursoId: selectedCourse,
+                estudianteId: annotationFormData.estudianteId || null
+            });
+            alert('Anotación registrada exitosamente.');
+            setShowAnnotationModal(false);
+            setAnnotationFormData({ ...annotationFormData, estudianteId: '', titulo: '', descripcion: '' });
+            refreshTabContent();
+        } catch (err: any) {
+            alert(err.response?.data?.message || 'Error al registrar la anotación.');
+        }
+    };
+
+    const handleShowStudentDetail = async (student: any) => {
+        setSelectedStudentForDetail(student);
+        setShowStudentDetailModal(true);
+        setStudentPerformance(null);
+        try {
+            const res = await api.get(`/analytics/student/${student._id}`);
+            setStudentPerformance(res.data);
+        } catch (err) {
+            console.error("Error fetching performance", err);
+        }
+    };
+
+    const handlePrintStudent = async (studentId: string, printImmediately: boolean = false) => {
+        try {
+            const response = await api.get(`/reports/student/${studentId}`);
+            const data = response.data;
+
+            const printWindow = window.open('', '_blank');
+            if (printWindow) {
+                printWindow.document.write(`
+                    <html>
+                        <head>
+                            <title>Ficha - ${data.student.nombres}</title>
+                            <style>
+                                body { font-family: 'Segoe UI', sans-serif; padding: 40px; color: #333; }
+                                .header { border-bottom: 2px solid #11355a; margin-bottom: 30px; padding-bottom: 20px; display: flex; justify-content: space-between; }
+                                h1 { color: #11355a; margin: 0; }
+                                .section { margin-bottom: 30px; }
+                                h2 { font-size: 1.2rem; color: #1e40af; border-left: 4px solid #1e40af; padding-left: 10px; margin-bottom: 15px; }
+                                table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+                                th, td { border: 1px solid #eee; padding: 10px; text-align: left; font-size: 0.9rem; }
+                                th { background: #f8fafc; font-weight: bold; color: #475569; }
+                                .tag { padding: 4px 8px; border-radius: 999px; font-size: 0.7em; font-weight: bold; }
+                                .tag.positiva { background: #d1fae5; color: #065f46; }
+                                .tag.negativa { background: #ffe4e6; color: #9f1239; }
+                                @media print { .no-print { display: none; } }
+                            </style>
+                        </head>
+                        <body>
+                            <div class="header">
+                                <div>
+                                    <h1>Ficha Estudiantil</h1>
+                                    <p style="font-size: 1.2rem; font-weight: bold; margin: 5px 0;">${data.student.nombres} ${data.student.apellidos}</p>
+                                </div>
+                                <div style="text-align: right; font-size: 0.9rem; color: #666;">
+                                    <p>RUT: ${data.student.rut || 'N/A'}</p>
+                                    <p>Curso: ${data.student.grado || 'Generado por Sistema'}</p>
+                                    <p>Fecha Emisión: ${new Date().toLocaleDateString()}</p>
+                                </div>
+                            </div>
+
+                            <div class="section">
+                                <h2>Historial Académico (Calificaciones)</h2>
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Asignatura</th>
+                                            <th>Evaluación</th>
+                                            <th>Nota</th>
+                                            <th>Fecha</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${data.grades.length ? data.grades.map((g: any) => `
+                                            <tr>
+                                                <td style="font-weight: bold; color: #1e40af;">${g.subjectName}</td>
+                                                <td>${g.title}</td>
+                                                <td style="font-weight: bold;">${g.score.toFixed(1)}</td>
+                                                <td>${new Date(g.date).toLocaleDateString()}</td>
+                                            </tr>
+                                        `).join('') : '<tr><td colspan="4" style="text-align:center; padding: 20px;">Sin registros de calificaciones</td></tr>'}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div class="section">
+                                <h2>Registro de Anotaciones</h2>
+                                ${data.annotations.length ? data.annotations.map((a: any) => `
+                                    <div style="margin-bottom: 15px; padding: 15px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
+                                        <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                                            <strong style="color: #11355a;">${a.titulo}</strong>
+                                            <span class="tag ${a.tipo}">${a.tipo.toUpperCase()}</span>
+                                        </div>
+                                        <p style="margin:5px 0; color:#475569; font-size: 0.9rem;">${a.descripcion}</p>
+                                        <div style="display: flex; justify-content: space-between; border-top: 1px dashed #cbd5e1; margin-top: 10px; pt: 5px;">
+                                            <small style="color:#94a3b8;">Fecha: ${new Date(a.fecha).toLocaleDateString()}</small>
+                                            <small style="color:#94a3b8;">Autor: ${a.autor || 'Sistema'}</small>
+                                        </div>
+                                    </div>
+                                `).join('') : '<p style="color: #94a3b8; font-style: italic;">No registra anotaciones a la fecha.</p>'}
+                            </div>
+
+                            ${printImmediately ? `<script>window.onload = () => { window.print(); setTimeout(() => window.close(), 1000); }</script>` : `<button class="no-print" onclick="window.print()" style="padding:10px 20px; background:#11355a; color:white; border:none; border-radius:5px; cursor:pointer; margin-top:20px;">Imprimir Documento Oficial</button>`}
+                        </body>
+                    </html>
+                `);
+                printWindow.document.close();
+            }
+        } catch (err) {
+            console.error(err);
+            alert('Error al generar la ficha.');
+        }
     };
 
     const filteredSubjects = selectedCourse ? subjects.filter(s => (s.courseId?._id || s.courseId) === selectedCourse) : [];
@@ -241,7 +481,8 @@ const UnifiedClassBook = () => {
                         { id: 'asistencia', label: 'Lista Digital', icon: UserCheck },
                         { id: 'leccionario', label: 'Leccionario', icon: List },
                         { id: 'notas', label: 'Calificaciones', icon: ClipboardList },
-                        { id: 'citaciones', label: 'Citaciones', icon: Calendar }
+                        { id: 'citaciones', label: 'Citaciones', icon: Calendar },
+                        { id: 'anotaciones', label: 'Anotaciones', icon: FileText }
                     ].map((tab: any) => (
                         <button key={tab.id} onClick={() => setActiveTab(tab.id as any)}
                             title={tab.label}
@@ -322,7 +563,7 @@ const UnifiedClassBook = () => {
                                                 </div>
                                                 <div className="mt-4 pt-4 border-t border-slate-50 flex gap-2">
                                                     <button
-                                                        onClick={() => { setSelectedStudentForDetail(s); setShowStudentDetailModal(true); }}
+                                                        onClick={() => handleShowStudentDetail(s)}
                                                         className="flex-1 py-2 bg-blue-50 text-blue-600 rounded-lg text-[9px] font-black uppercase tracking-widest hover:bg-blue-100 transition-all"
                                                     >
                                                         HOJA DE VIDA
@@ -370,10 +611,10 @@ const UnifiedClassBook = () => {
                                                 onChange={e => setSelectedBlock(e.target.value)}
                                                 className="bg-slate-50 px-6 py-4 rounded-2xl border-2 border-slate-100 font-black text-slate-700 text-xs outline-none focus:border-blue-500"
                                             >
-                                                <option>Bloque 1 (08:00 - 09:30)</option>
-                                                <option>Bloque 2 (09:45 - 11:15)</option>
-                                                <option>Bloque 3 (11:30 - 13:00)</option>
-                                                <option>Bloque 4 (14:00 - 15:30)</option>
+                                                <option>Bloque 1</option>
+                                                <option>Bloque 2</option>
+                                                <option>Bloque 3</option>
+                                                <option>Bloque 4</option>
                                             </select>
                                             <div className="flex items-center gap-4 bg-slate-50 px-6 py-4 rounded-2xl border-2 border-slate-100">
                                                 <Calendar size={18} className="text-slate-300" />
@@ -463,8 +704,19 @@ const UnifiedClassBook = () => {
                                 <div className="space-y-8">
                                     <div className="flex justify-between items-center px-4">
                                         <h2 className="text-2xl font-black text-[#11355a] uppercase tracking-tighter">Leccionario Digital (Firmado)</h2>
-                                        <button onClick={() => setShowLogForm(true)} disabled={!selectedSubject}
-                                            className="bg-[#11355a] text-white px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-all shadow-xl disabled:opacity-50">NUEVA FIRMA DE CLASE</button>
+                                        <div className="flex items-center gap-6">
+                                            <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl border-2 transition-all ${isTimerRunning ? 'bg-blue-50 border-blue-200 animate-pulse' : 'bg-slate-50 border-slate-100'}`}>
+                                                <div className={`w-3 h-3 rounded-full ${isTimerRunning ? 'bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)]' : 'bg-slate-300'}`}></div>
+                                                <div className="flex flex-col">
+                                                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Aula Efectiva</span>
+                                                    <span className={`text-xl font-black tabular-nums transition-colors ${isTimerRunning ? 'text-blue-600' : 'text-slate-400'}`}>
+                                                        {effectiveDuration}m
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <button onClick={() => setShowLogForm(true)} disabled={!selectedSubject}
+                                                className="bg-[#11355a] text-white px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest hover:scale-105 transition-all shadow-xl disabled:opacity-50">NUEVA FIRMA DE CLASE</button>
+                                        </div>
                                     </div>
 
                                     {showLogForm && (
@@ -619,7 +871,7 @@ const UnifiedClassBook = () => {
                                                 </div>
                                                 <div className="flex gap-2">
                                                     <button className="p-3 bg-slate-50 text-slate-400 rounded-xl hover:bg-slate-100 transition-all"><X size={18} /></button>
-                                                    <button className="px-6 py-3 bg-blue-50 text-blue-600 rounded-xl font-black text-[9px] uppercase tracking-widest hover:bg-blue-600 hover:text-white transition-all">Ver Acta</button>
+                                                    <button onClick={() => openActaModal(c)} className="px-6 py-3 bg-blue-50 text-blue-600 rounded-xl font-black text-[9px] uppercase tracking-widest hover:bg-blue-600 hover:text-white transition-all">Ver Acta</button>
                                                 </div>
                                             </div>
                                         ))}
@@ -674,6 +926,220 @@ const UnifiedClassBook = () => {
                                             </div>
                                         </div>
                                     )}
+
+                                    {showActaModal && selectedCitacion && (
+                                        <div className="fixed inset-0 bg-[#11355a]/90 backdrop-blur-xl z-[200] flex items-center justify-center p-4">
+                                            <div className="bg-white rounded-[4rem] w-full max-w-4xl max-h-[90vh] shadow-2xl overflow-hidden animate-in zoom-in-95 flex flex-col border-b-[16px] border-blue-600">
+                                                <div className="p-10 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                                                    <div>
+                                                        <h2 className="text-3xl font-black text-[#11355a] uppercase tracking-tighter">Acta de Reunión</h2>
+                                                        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest mt-1">
+                                                            Estudiante: {selectedCitacion.estudianteId?.apellidos}, {selectedCitacion.estudianteId?.nombres}
+                                                        </p>
+                                                    </div>
+                                                    <div className="flex gap-4">
+                                                        <button type="button" onClick={() => handlePrintActa()} className="p-4 bg-[#11355a] text-white rounded-2xl hover:scale-110 shadow-lg transition-all">
+                                                            <Printer size={24} />
+                                                        </button>
+                                                        <button type="button" onClick={() => setShowActaModal(false)} className="text-slate-300 hover:text-rose-500 transition-colors">
+                                                            <X size={40} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                <form onSubmit={handleSaveActa} className="p-10 overflow-y-auto custom-scrollbar space-y-8 flex-1">
+                                                    <div className="grid grid-cols-2 gap-8">
+                                                        <div className="space-y-2">
+                                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Estado de la Citación</label>
+                                                            <select value={actaFormData.estado} onChange={e => setActaFormData({ ...actaFormData, estado: e.target.value })} className="w-full px-8 py-5 bg-slate-50 border-2 border-slate-100 rounded-3xl font-bold">
+                                                                <option value="programada">Programada</option>
+                                                                <option value="confirmada">Confirmada</option>
+                                                                <option value="realizada">Realizada</option>
+                                                                <option value="cancelada">Cancelada</option>
+                                                            </select>
+                                                        </div>
+                                                        <div className="space-y-4">
+                                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Asistencia del Apoderado</label>
+                                                            <div className="flex gap-4">
+                                                                <button type="button" onClick={() => setActaFormData({ ...actaFormData, asistioApoderado: true })} className={`flex-1 py-4 rounded-2xl font-black text-[9px] uppercase tracking-widest border-2 transition-all ${actaFormData.asistioApoderado ? 'bg-emerald-50 border-emerald-500 text-emerald-600' : 'bg-slate-50 border-slate-100 text-slate-400'}`}>SÍ ASISTIÓ</button>
+                                                                <button type="button" onClick={() => setActaFormData({ ...actaFormData, asistioApoderado: false })} className={`flex-1 py-4 rounded-2xl font-black text-[9px] uppercase tracking-widest border-2 transition-all ${!actaFormData.asistioApoderado ? 'bg-rose-50 border-rose-500 text-rose-600' : 'bg-slate-50 border-slate-100 text-slate-400'}`}>NO ASISTIÓ</button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="space-y-2">
+                                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Desarrollo de la Entrevista (Minuta)</label>
+                                                        <textarea value={actaFormData.actaReunion} onChange={e => setActaFormData({ ...actaFormData, actaReunion: e.target.value })} className="w-full px-8 py-5 bg-slate-50 border-2 border-slate-100 rounded-3xl font-bold resize-none" rows={4} placeholder="Escriba los puntos tratados..."></textarea>
+                                                    </div>
+
+                                                    <div className="grid grid-cols-2 gap-8">
+                                                        <div className="space-y-2">
+                                                            <label className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">Acuerdos y Compromisos</label>
+                                                            <textarea value={actaFormData.acuerdo} onChange={e => setActaFormData({ ...actaFormData, acuerdo: e.target.value })} className="w-full px-8 py-5 bg-emerald-50 border-2 border-emerald-100 rounded-3xl font-bold resize-none" rows={3} placeholder="¿A qué se comprometió el apoderado/escuela?"></textarea>
+                                                        </div>
+                                                        <div className="space-y-2">
+                                                            <label className="text-[10px] font-black text-blue-600 uppercase tracking-widest">Resolución / Resultado</label>
+                                                            <textarea value={actaFormData.resultado} onChange={e => setActaFormData({ ...actaFormData, resultado: e.target.value })} className="w-full px-8 py-5 bg-blue-50 border-2 border-blue-100 rounded-3xl font-bold resize-none" rows={3} placeholder="Resultado final de la reunión..."></textarea>
+                                                        </div>
+                                                    </div>
+
+                                                    <button type="submit" className="w-full py-6 bg-[#11355a] text-white rounded-[2.5rem] font-black uppercase text-xs tracking-widest shadow-xl hover:scale-[1.02] transition-all">
+                                                        GUARDAR CAMBIOS EN EL ACTA
+                                                    </button>
+                                                </form>
+
+                                                {/* Printable Template (Hidden) */}
+                                                <div className="hidden">
+                                                    <div ref={actaPrintRef} className="p-20 text-slate-900 bg-white min-h-[1000px]">
+                                                        <div className="flex justify-between items-start border-b-4 border-[#11355a] pb-10 mb-10">
+                                                            <div>
+                                                                <h1 className="text-4xl font-black uppercase tracking-tighter text-[#11355a]">ACTA DE REUNIÓN</h1>
+                                                                <p className="text-lg font-bold text-slate-500 uppercase tracking-widest">SISTEMA ELECTRÓNICO EINSMART</p>
+                                                            </div>
+                                                            <div className="text-right">
+                                                                <div className="text-2xl font-black uppercase">{tenant?.name || 'ESTABLECIMIENTO'}</div>
+                                                                <div className="text-slate-400 font-bold uppercase text-xs">AÑO ESCOLAR {new Date().getFullYear()}</div>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="grid grid-cols-2 gap-10 mb-10">
+                                                            <div className="space-y-4">
+                                                                <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2">DATOS DEL ESTUDIANTE</h3>
+                                                                <div className="text-sm"><span className="font-black uppercase">ALUMNO:</span> {selectedCitacion.estudianteId?.nombres} {selectedCitacion.estudianteId?.apellidos}</div>
+                                                                <div className="text-sm"><span className="font-black uppercase">CURSO:</span> {courses.find(c => c._id === selectedCourse)?.name || 'N/A'}</div>
+                                                            </div>
+                                                            <div className="space-y-4">
+                                                                <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2">DETALLES DE LA CITA</h3>
+                                                                <div className="text-sm"><span className="font-black uppercase">FECHA:</span> {new Date(selectedCitacion.fecha).toLocaleDateString()}</div>
+                                                                <div className="text-sm"><span className="font-black uppercase">HORA:</span> {selectedCitacion.hora} hrs</div>
+                                                                <div className="text-sm"><span className="font-black uppercase">MOTIVO:</span> {selectedCitacion.motivo}</div>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="space-y-10">
+                                                            <div className="p-8 bg-slate-50 rounded-[2rem] border border-slate-100">
+                                                                <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">DESARROLLO DE LA ENTREVISTA</h3>
+                                                                <p className="text-sm whitespace-pre-wrap leading-relaxed">{actaFormData.actaReunion || 'No se registraron detalles del desarrollo.'}</p>
+                                                            </div>
+
+                                                            <div className="grid grid-cols-2 gap-10">
+                                                                <div className="p-8 border-2 border-emerald-100 rounded-[2rem] bg-emerald-50/50">
+                                                                    <h3 className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-4">ACUERDOS Y COMPROMISOS</h3>
+                                                                    <p className="text-sm whitespace-pre-wrap leading-relaxed">{actaFormData.acuerdo || 'Sin acuerdos registrados.'}</p>
+                                                                </div>
+                                                                <div className="p-8 border-2 border-blue-100 rounded-[2rem] bg-blue-50/50">
+                                                                    <h3 className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-4">RESULTADOS / RESOLUCIÓN</h3>
+                                                                    <p className="text-sm whitespace-pre-wrap leading-relaxed">{actaFormData.resultado || 'Pendiente de resolución.'}</p>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="mt-32 grid grid-cols-2 gap-20 text-center">
+                                                            <div className="border-t-2 border-slate-200 pt-8">
+                                                                <div className="font-black uppercase text-xs mb-1">FIRMA RESPONSABLE COLEGIO</div>
+                                                                <div className="text-[8px] text-slate-300 uppercase font-bold tracking-tighter">CERTIFICADO DIGITAL EINSMART ID-{selectedCitacion._id.slice(-8)}</div>
+                                                            </div>
+                                                            <div className="border-t-2 border-slate-200 pt-8">
+                                                                <div className="font-black uppercase text-xs mb-1">FIRMA APODERADO / TUTOR</div>
+                                                                <div className="text-[8px] text-slate-300 uppercase font-bold tracking-tighter">ASISTENCIA: {actaFormData.asistioApoderado ? 'SÍ ASISTIÓ' : 'NO ASISTIÓ'}</div>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="mt-20 text-center">
+                                                            <p className="text-[8px] text-slate-300 font-black uppercase tracking-[0.5em]">DOCUMENTO OFICIAL GENERADO POR EINSMART • NO REQUIERE TIMBRE FÍSICO SI TIENE CÓDIGO DE VALIDACIÓN</p>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {activeTab === 'anotaciones' && (
+                                <div className="space-y-8">
+                                    <div className="flex justify-between items-center px-4">
+                                        <h2 className="text-2xl font-black text-[#11355a] uppercase tracking-tighter">Anotaciones del Curso</h2>
+                                        <button onClick={() => setShowAnnotationModal(true)} className="bg-[#11355a] text-white px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl hover:scale-105 transition-all">NUEVA ANOTACIÓN</button>
+                                    </div>
+
+                                    <div className="grid gap-6">
+                                        {annotations.map((a: any) => (
+                                            <div key={a._id} className={`bg-white p-8 rounded-[2.5rem] shadow-xl border-l-[12px] flex flex-col md:flex-row gap-8 items-center group transition-all
+                                                ${a.tipo === 'positiva' ? 'border-emerald-500' : a.tipo === 'negativa' ? 'border-rose-500' : 'border-blue-500'}`}>
+                                                <div className={`w-20 h-20 rounded-full flex items-center justify-center
+                                                    ${a.tipo === 'positiva' ? 'bg-emerald-50 text-emerald-500' : a.tipo === 'negativa' ? 'bg-rose-50 text-rose-500' : 'bg-blue-50 text-blue-500'}`}>
+                                                    <FileText size={32} />
+                                                </div>
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-3 mb-2">
+                                                        <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-widest border
+                                                            ${a.tipo === 'positiva' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
+                                                                a.tipo === 'negativa' ? 'bg-rose-50 text-rose-600 border-rose-100' :
+                                                                    'bg-blue-50 text-blue-600 border-blue-100'}`}>
+                                                            {a.tipo}
+                                                        </span>
+                                                        <span className="text-[10px] font-black text-slate-400 uppercase">
+                                                            {a.estudianteId ? `${a.estudianteId.apellidos}, ${a.estudianteId.nombres}` : 'CURSO GENERAL'}
+                                                        </span>
+                                                    </div>
+                                                    <h4 className="text-lg font-black text-[#11355a] uppercase">{a.titulo}</h4>
+                                                    <p className="text-xs font-bold text-slate-500 italic mt-1">{a.descripcion}</p>
+                                                </div>
+                                                <div className="text-right">
+                                                    <div className="text-xl font-black text-[#11355a]">{new Date(a.fechaOcurrencia || a.createdAt).toLocaleDateString()}</div>
+                                                    <div className="text-xs font-bold text-slate-400">Por: {a.creadoPor?.name || 'Sistema'}</div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        {annotations.length === 0 && (
+                                            <div className="bg-white p-20 rounded-[4rem] border-4 border-dashed border-slate-100 text-center">
+                                                <FileText size={60} className="mx-auto text-slate-100 mb-8" />
+                                                <h3 className="text-2xl font-black text-slate-300 uppercase tracking-tighter">Hoja de Vida Digital</h3>
+                                                <p className="text-slate-300 font-bold uppercase tracking-[0.3em] text-[10px] mt-4">No hay anotaciones registradas para este curso.</p>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {showAnnotationModal && (
+                                        <div className="fixed inset-0 bg-[#11355a]/90 backdrop-blur-xl z-[200] flex items-center justify-center p-4">
+                                            <div className="bg-white rounded-[4rem] w-full max-w-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 p-12 border-b-[16px] border-blue-500">
+                                                <div className="flex justify-between items-center mb-10">
+                                                    <h2 className="text-3xl font-black text-[#11355a] uppercase tracking-tighter">Nueva Anotación</h2>
+                                                    <button onClick={() => setShowAnnotationModal(false)} className="text-slate-300 hover:text-rose-500 transition-colors"><X size={40} /></button>
+                                                </div>
+
+                                                <form onSubmit={handleSaveAnnotation} className="space-y-8">
+                                                    <div className="grid grid-cols-2 gap-6">
+                                                        <div className="space-y-2">
+                                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Estudiante (Opcional)</label>
+                                                            <select value={annotationFormData.estudianteId} onChange={e => setAnnotationFormData({ ...annotationFormData, estudianteId: e.target.value })} className="w-full px-8 py-5 bg-slate-50 border-2 border-slate-100 rounded-3xl font-bold">
+                                                                <option value="">-- TODO EL CURSO --</option>
+                                                                {students.map(s => <option key={s._id} value={s._id}>{s.apellidos}, {s.nombres}</option>)}
+                                                            </select>
+                                                        </div>
+                                                        <div className="space-y-2">
+                                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Tipo</label>
+                                                            <select required value={annotationFormData.tipo} onChange={e => setAnnotationFormData({ ...annotationFormData, tipo: e.target.value })} className="w-full px-8 py-5 bg-slate-50 border-2 border-slate-100 rounded-3xl font-bold">
+                                                                <option value="positiva">Positiva</option>
+                                                                <option value="negativa">Negativa</option>
+                                                                <option value="general">Mensaje / General</option>
+                                                            </select>
+                                                        </div>
+                                                        <div className="space-y-2 col-span-2">
+                                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Título / Asunto</label>
+                                                            <input required type="text" value={annotationFormData.titulo} onChange={e => setAnnotationFormData({ ...annotationFormData, titulo: e.target.value })} className="w-full px-8 py-5 bg-slate-50 border-2 border-slate-100 rounded-3xl font-bold" placeholder="Ej: Excelente participación en clase" />
+                                                        </div>
+                                                    </div>
+                                                    <div className="space-y-2">
+                                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Descripción</label>
+                                                        <textarea required value={annotationFormData.descripcion} onChange={e => setAnnotationFormData({ ...annotationFormData, descripcion: e.target.value })} className="w-full px-8 py-5 bg-slate-50 border-2 border-slate-100 rounded-3xl font-bold resize-none" rows={3} placeholder="Detalle la observación..."></textarea>
+                                                    </div>
+                                                    <button type="submit" className="w-full py-6 bg-blue-600 text-white rounded-[2.5rem] font-black uppercase text-xs tracking-widest shadow-xl shadow-blue-500/20 hover:scale-[1.02] transition-all">REGISTRAR EN HOJA DE VIDA</button>
+                                                </form>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>
@@ -689,10 +1155,47 @@ const UnifiedClassBook = () => {
                                     <h2 className="text-xl font-bold flex items-center gap-3"><GraduationCap size={24} /> Ingresar Calificación</h2>
                                     <button onClick={() => setShowGradeModal(false)} className="text-white/40 hover:text-white transition-colors"><X size={32} /></button>
                                 </div>
-                                <div className="p-10 space-y-8">
-                                    <p className="text-sm font-bold text-slate-500 italic">Módulo de ingreso rápido en proceso de optimización para tablets.</p>
-                                    <button onClick={() => setShowGradeModal(false)} className="w-full py-6 bg-slate-100 text-slate-400 rounded-3xl font-black uppercase text-xs tracking-widest transition-all">Cerrar Ventana</button>
-                                </div>
+                                <form onSubmit={handleSaveGrade} className="p-10 space-y-6">
+                                    <div>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Estudiante</label>
+                                        <select required
+                                            value={gradeFormData.estudianteId}
+                                            onChange={e => setGradeFormData({ ...gradeFormData, estudianteId: e.target.value })}
+                                            className="w-full px-6 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl font-bold outline-none focus:border-blue-500 transition-all"
+                                        >
+                                            <option value="">Seleccionar Estudiante</option>
+                                            {students.map((s: any) => (
+                                                <option key={s._id} value={s._id}>{s.apellidos}, {s.nombres}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Evaluación</label>
+                                        <select required
+                                            value={gradeFormData.evaluationId}
+                                            onChange={e => setGradeFormData({ ...gradeFormData, evaluationId: e.target.value })}
+                                            className="w-full px-6 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl font-bold outline-none focus:border-blue-500 transition-all"
+                                        >
+                                            <option value="">Seleccionar Evaluación</option>
+                                            {evaluations.map((ev: any) => (
+                                                <option key={ev._id} value={ev._id}>{ev.title}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Nota</label>
+                                            <input required type="number" step="0.1" min="1" max="7"
+                                                value={gradeFormData.score}
+                                                onChange={e => setGradeFormData({ ...gradeFormData, score: parseFloat(e.target.value) })}
+                                                className="w-full px-6 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl font-black text-2xl text-center text-[#11355a] outline-none focus:border-blue-500 transition-all"
+                                            />
+                                        </div>
+                                    </div>
+                                    <button type="submit" className="w-full py-6 bg-[#11355a] text-white rounded-3xl font-black uppercase text-xs tracking-widest shadow-xl shadow-blue-900/20 hover:scale-[1.02] transition-all">
+                                        GUARDAR CALIFICACIÓN
+                                    </button>
+                                </form>
                             </div>
                         </div>
                     )
@@ -797,20 +1300,36 @@ const UnifiedClassBook = () => {
                                     {/* Quick Stats Placeholder */}
                                     <div className="grid grid-cols-3 gap-4">
                                         <div className="p-4 bg-emerald-50 rounded-2xl text-center border border-emerald-100">
-                                            <div className="text-2xl font-black text-emerald-600">95%</div>
-                                            <div className="text-[8px] font-bold text-emerald-400 uppercase">Asistencia</div>
+                                            <div className="text-2xl font-black text-emerald-600">
+                                                {studentPerformance ? `${studentPerformance.passingStatus === 'Aprueba' ? '95%' : '70%'}` : '...'}
+                                            </div>
+                                            <div className="text-[8px] font-bold text-emerald-400 uppercase">Asistencia Est.</div>
                                         </div>
                                         <div className="p-4 bg-blue-50 rounded-2xl text-center border border-blue-100">
-                                            <div className="text-2xl font-black text-blue-600">6.2</div>
-                                            <div className="text-[8px] font-bold text-blue-400 uppercase">Promedio</div>
+                                            <div className="text-2xl font-black text-blue-600">
+                                                {studentPerformance?.overallAverage?.toFixed(1) || '--'}
+                                            </div>
+                                            <div className="text-[8px] font-bold text-blue-400 uppercase">Promedio Gral</div>
                                         </div>
                                         <div className="p-4 bg-amber-50 rounded-2xl text-center border border-amber-100">
-                                            <div className="text-2xl font-black text-amber-600">2</div>
+                                            <div className="text-2xl font-black text-amber-600">
+                                                {studentPerformance?.annotations ? (studentPerformance.annotations.positiva + studentPerformance.annotations.negativa) : '--'}
+                                            </div>
                                             <div className="text-[8px] font-bold text-amber-400 uppercase">Anotaciones</div>
                                         </div>
                                     </div>
 
-                                    <button onClick={() => setShowStudentDetailModal(false)} className="w-full py-4 bg-[#11355a] text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg">Cerrar Ficha</button>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-8">
+                                        <button onClick={() => handlePrintStudent(selectedStudentForDetail._id, true)} className="py-4 bg-slate-100 text-slate-500 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-slate-200 transition-all flex items-center justify-center gap-2">
+                                            <Printer size={18} /> Imprimir Ficha
+                                        </button>
+                                        <button onClick={() => handlePrintStudent(selectedStudentForDetail._id, false)} className="py-4 bg-blue-50 text-blue-600 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-blue-100 transition-all flex items-center justify-center gap-2">
+                                            <ExternalLink size={18} /> Ver Detalles Completos
+                                        </button>
+                                        <button onClick={() => setShowStudentDetailModal(false)} className="md:col-span-2 py-4 bg-[#11355a] text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg hover:scale-[1.01] transition-all">
+                                            Cerrar Ficha
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>

@@ -1,11 +1,12 @@
 import ClassLog from '../models/classLogModel.js';
 import Schedule from '../models/scheduleModel.js';
+import User from '../models/userModel.js';
 import mongoose from 'mongoose';
 
 class ClassLogController {
     static async startClass(req, res) {
         try {
-            const { courseId, subjectId } = req.body;
+            const { courseId, subjectId, bloqueHorario } = req.body;
 
             // Find if there's an existing unsigned log for this course/subject today
             const today = new Date();
@@ -51,6 +52,7 @@ class ClassLogController {
                     startTime: new Date(),
                     topic: 'Clase en curso...',
                     activities: '',
+                    bloqueHorario,
                     scheduleId: schedule ? schedule._id : undefined,
                     status: 'en_curso'
                 });
@@ -88,7 +90,7 @@ class ClassLogController {
 
     static async create(req, res) {
         try {
-            const { courseId, subjectId, date, topic, activities, objectives, startTime, planningId } = req.body;
+            const { courseId, subjectId, date, topic, activities, objectives, startTime, planningId, bloqueHorario } = req.body;
 
             // If there's an existing draft log for this course/subject today, update it instead of creating
             const today = new Date();
@@ -111,6 +113,7 @@ class ClassLogController {
                 log.objectives = objectives;
                 if (planningId) log.planningId = planningId;
                 if (startTime) log.startTime = new Date(startTime);
+                if (bloqueHorario) log.bloqueHorario = bloqueHorario;
                 await log.save();
             } else {
                 log = new ClassLog({
@@ -123,6 +126,7 @@ class ClassLogController {
                     activities,
                     objectives,
                     planningId,
+                    bloqueHorario,
                     startTime: startTime ? new Date(startTime) : undefined
                 });
 
@@ -192,7 +196,7 @@ class ClassLogController {
     static async sign(req, res) {
         try {
             const { id } = req.params;
-            const { pin } = req.body;
+            const { pin, effectiveDuration, bloqueHorario: signBlock } = req.body;
 
             const [log, user] = await Promise.all([
                 ClassLog.findOne({ _id: id, tenantId: req.user.tenantId }),
@@ -214,10 +218,25 @@ class ClassLogController {
             log.isSigned = true;
             log.signedAt = new Date();
 
+            if (effectiveDuration !== undefined) {
+                log.effectiveDuration = effectiveDuration;
+            }
+            if (signBlock && !log.bloqueHorario) {
+                log.bloqueHorario = signBlock;
+            }
+
             // Calculate duration and final metrics if startTime exists
             if (log.startTime) {
                 const diffMs = log.signedAt.getTime() - log.startTime.getTime();
-                log.duration = Math.max(0, Math.round(diffMs / 60000)); // Round to nearest minute
+                const calculatedDuration = Math.max(0, Math.round(diffMs / 60000));
+
+                // If effectiveDuration wasn't provided, use calculated
+                if (log.effectiveDuration === 0) {
+                    log.effectiveDuration = calculatedDuration;
+                }
+
+                // Update legacy duration field for compatibility
+                log.duration = log.effectiveDuration;
 
                 // If it was linked to a schedule, finalize status
                 if (log.scheduleId) {

@@ -76,8 +76,13 @@ class EvaluationController {
                 }
             }
 
+            const evaluationData = { ...req.body };
+            if (evaluationData.rubricId === '') {
+                evaluationData.rubricId = null;
+            }
+
             const evaluation = new Evaluation({
-                ...req.body,
+                ...evaluationData,
                 tenantId: req.user.tenantId,
                 status: (['admin', 'director', 'utp'].includes(req.user.role)) ? 'approved' : 'draft'
             });
@@ -134,6 +139,23 @@ class EvaluationController {
                 } else {
                     return res.status(403).json({ message: 'Perfil no vinculado' });
                 }
+            } else if (req.user.role === 'teacher') {
+                // [FIX] Data Isolation for Teachers
+                const Course = await import('../models/courseModel.js').then(m => m.default);
+                const Subject = await import('../models/subjectModel.js').then(m => m.default);
+
+                // Courses as Head Teacher
+                const headCourses = await Course.find({ teacherId: req.user.userId, tenantId: req.user.tenantId }).select('_id');
+
+                // Courses as Subject Teacher
+                const subjectAssignments = await Subject.find({ teacherId: req.user.userId, tenantId: req.user.tenantId }).select('courseId');
+
+                const courseIds = [
+                    ...headCourses.map(c => c._id),
+                    ...subjectAssignments.map(s => s.courseId)
+                ];
+
+                query.courseId = { $in: courseIds };
             } else if (studentId || guardianId) {
                 // ... handle explicit IDs for staff if needed
                 if (studentId) {
@@ -144,6 +166,23 @@ class EvaluationController {
             }
 
             if (subjectId) query.subjectId = subjectId;
+
+            // [NEW] Date and Month Filtering
+            if (req.query.date) {
+                const startOfDay = new Date(req.query.date);
+                startOfDay.setHours(0, 0, 0, 0);
+                const endOfDay = new Date(req.query.date);
+                endOfDay.setHours(23, 59, 59, 999);
+                query.date = { $gte: startOfDay, $lte: endOfDay };
+            } else if (req.query.month) {
+                const startOfMonth = new Date(req.query.month);
+                startOfMonth.setDate(1);
+                startOfMonth.setHours(0, 0, 0, 0);
+                const endOfMonth = new Date(startOfMonth);
+                endOfMonth.setMonth(endOfMonth.getMonth() + 1);
+                endOfMonth.setMilliseconds(-1);
+                query.date = { $gte: startOfMonth, $lte: endOfMonth };
+            }
 
             // [APPROVAL STATUS FILTERING]
             if (req.user.role === 'student' || req.user.role === 'apoderado') {
@@ -233,9 +272,14 @@ class EvaluationController {
             // [RELAXED SCHEDULE ENFORCEMENT FOR UPDATES]
             // We allow updates even if out of schedule for flexibility.
 
+            const updateData = { ...req.body };
+            if (updateData.rubricId === '') {
+                updateData.rubricId = null;
+            }
+
             const updatedEvaluation = await Evaluation.findOneAndUpdate(
                 { _id: req.params.id, tenantId: req.user.tenantId },
-                req.body,
+                updateData,
                 { new: true }
             ).populate('courseId', 'name code').populate('subjectId', 'name').populate('rubricId');
 
@@ -260,6 +304,11 @@ class EvaluationController {
             if (!evaluation) {
                 return res.status(404).json({ message: 'Evaluación no encontrada' });
             }
+
+            // Cleanup associated grades
+            const Grade = await import('../models/gradeModel.js').then(m => m.default);
+            await Grade.deleteMany({ evaluationId: evaluation._id, tenantId: req.user.tenantId });
+
             res.status(204).send();
         } catch (error) {
             res.status(500).json({ message: error.message });

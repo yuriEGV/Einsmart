@@ -190,10 +190,39 @@ class AnalyticsController {
         try {
             await connectDB();
             const tenantId = req.user.role === 'admin' ? req.query.tenantId || req.user.tenantId : req.user.tenantId;
+            const courseId = req.query.courseId ? new mongoose.Types.ObjectId(req.query.courseId) : null;
+
+            // Build match criteria
+            let matchCriteria = { tenantId: new mongoose.Types.ObjectId(tenantId) };
+
+            // If courseId is provided, get students in that course first
+            if (courseId) {
+                const course = await Course.findById(courseId);
+                if (course) {
+                    // Find students whose grado matches the course name
+                    const studentsInCourse = await Estudiante.find({
+                        tenantId: new mongoose.Types.ObjectId(tenantId),
+                        grado: { $regex: course.name, $options: 'i' }
+                    });
+
+                    const studentIdsInCourse = studentsInCourse.map(s => s._id);
+
+                    if (studentIdsInCourse.length > 0) {
+                        matchCriteria.estudianteId = { $in: studentIdsInCourse };
+                    } else {
+                        // No students in this course, return empty results
+                        return res.status(200).json({
+                            mostPositive: [],
+                            mostNegative: [],
+                            allStudents: []
+                        });
+                    }
+                }
+            }
 
             // Most positive annotations
             const positiveRankings = await Anotacion.aggregate([
-                { $match: { tenantId: new mongoose.Types.ObjectId(tenantId), tipo: 'positiva' } },
+                { $match: { ...matchCriteria, tipo: 'positiva' } },
                 {
                     $lookup: {
                         from: 'estudiantes',
@@ -217,7 +246,7 @@ class AnalyticsController {
 
             // Most negative annotations
             const negativeRankings = await Anotacion.aggregate([
-                { $match: { tenantId: new mongoose.Types.ObjectId(tenantId), tipo: 'negativa' } },
+                { $match: { ...matchCriteria, tipo: 'negativa' } },
                 {
                     $lookup: {
                         from: 'estudiantes',
@@ -241,7 +270,7 @@ class AnalyticsController {
 
             // Combined view (all students with both counts)
             const combinedRankings = await Anotacion.aggregate([
-                { $match: { tenantId: new mongoose.Types.ObjectId(tenantId) } },
+                { $match: matchCriteria },
                 {
                     $lookup: {
                         from: 'estudiantes',
@@ -357,17 +386,58 @@ class AnalyticsController {
             await connectDB();
             const tenantId = req.user.tenantId;
 
-            // Count students
-            const studentCount = await Estudiante.countDocuments({ tenantId: new mongoose.Types.ObjectId(tenantId) });
+            let studentCount = 0;
+            let courseCount = 0;
 
-            // Count courses
-            const Course = mongoose.model('Course');
-            const courseCount = await Course.countDocuments({ tenantId: new mongoose.Types.ObjectId(tenantId) });
+            if (req.user.role === 'teacher') {
+                const Course = mongoose.model('Course');
+                const Subject = mongoose.model('Subject');
+                const Enrollment = mongoose.model('Enrollment');
+
+                // 1. Find courses where teacher is Head Teacher
+                const headCourses = await Course.find({ teacherId: req.user.userId, tenantId }).select('_id');
+                // 2. Find courses where teacher teaches a Subject
+                const subjectAssignments = await Subject.find({ teacherId: req.user.userId, tenantId }).select('courseId');
+
+                const courseIds = new Set([
+                    ...headCourses.map(c => c._id.toString()),
+                    ...subjectAssignments.map(s => s.courseId.toString())
+                ]);
+
+                courseCount = courseIds.size;
+
+                // 3. Count unique students in those courses
+                if (courseCount > 0) {
+                    const enrollments = await Enrollment.find({
+                        courseId: { $in: Array.from(courseIds) },
+                        tenantId
+                    }).distinct('estudianteId');
+                    studentCount = enrollments.length;
+                }
+
+            } else if (req.user.role === 'admin') {
+                // [NEW] Global Admin stats for platform view
+                const [students, tenants] = await Promise.all([
+                    mongoose.model('Estudiante').countDocuments({}),
+                    mongoose.model('Tenant').countDocuments({})
+                ]);
+                return res.status(200).json({
+                    studentCount: students,
+                    tenantCount: tenants,
+                    isPlatformView: true
+                });
+            } else {
+                // Admin/Director/Sostenedor see local school stats
+                studentCount = await Estudiante.countDocuments({ tenantId: new mongoose.Types.ObjectId(tenantId) });
+
+                const Course = mongoose.model('Course');
+                courseCount = await Course.countDocuments({ tenantId: new mongoose.Types.ObjectId(tenantId) });
+            }
 
             return res.status(200).json({
                 studentCount,
                 courseCount,
-                isTenantActive: true // Simplification for now
+                isTenantActive: true
             });
         } catch (error) {
             return res.status(500).json({ message: error.message });
@@ -580,8 +650,13 @@ class AnalyticsController {
                 { $match: { tenantId } },
                 {
                     $group: {
-                        _id: { courseId: '$courseId', subjectId: '$subjectId' },
-                        totalDuration: { $sum: '$duration' },
+                        _id: {
+                            courseId: '$courseId',
+                            subjectId: '$subjectId',
+                            date: { $dateToString: { format: "%Y-%m-%d", date: "$date" } },
+                            bloqueHorario: '$bloqueHorario'
+                        },
+                        totalDuration: { $sum: '$effectiveDuration' },
                         totalDelay: { $sum: '$delayMinutes' },
                         totalInterruption: { $sum: '$interruptionMinutes' },
                         classCount: { $sum: 1 }
@@ -609,6 +684,8 @@ class AnalyticsController {
                     $project: {
                         courseName: '$course.name',
                         subjectName: '$subject.name',
+                        date: '$_id.date',
+                        bloqueHorario: '$_id.bloqueHorario',
                         totalDuration: 1,
                         plannedDuration: {
                             $multiply: [
@@ -626,7 +703,7 @@ class AnalyticsController {
                                     $multiply: [
                                         {
                                             $divide: [
-                                                '$duration',
+                                                '$totalDuration',
                                                 { $divide: [{ $subtract: ['$plannedEndTime', '$plannedStartTime'] }, 60000] }
                                             ]
                                         },
